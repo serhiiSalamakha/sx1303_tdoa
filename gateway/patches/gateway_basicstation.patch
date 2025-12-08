@@ -1,0 +1,344 @@
+diff --git a/reset_lgw.sh b/reset_lgw.sh
+new file mode 100755
+index 0000000..561425c
+--- /dev/null
++++ b/reset_lgw.sh
+@@ -0,0 +1,110 @@
++#!/bin/sh
++
++# This script is intended to be used on SX1302 CoreCell platform, it performs
++# the following actions:
++#       - export/unpexort GPIO23 and GPIO18 used to reset the SX1302 chip and to enable the LDOs
++#       - export/unexport GPIO22 used to reset the optional SX1261 radio used for LBT/Spectral Scan
++#
++# Usage examples:
++#       ./reset_lgw.sh stop
++#       ./reset_lgw.sh start
++
++# GPIO mapping has to be adapted with HW
++#
++
++SX1302_RESET_PIN=23     # SX1302 reset
++SX1302_POWER_EN_PIN=18  # SX1302 power enable
++SX1261_RESET_PIN=22     # SX1261 reset (LBT / Spectral Scan)
++AD5338R_RESET_PIN=13    # AD5338R reset (full-duplex CN490 reference design)
++
++WAIT_GPIO() {
++    sleep 0.01
++}
++
++init() {
++    # # setup GPIOs
++    pinctrl set $SX1302_RESET_PIN op; WAIT_GPIO
++    pinctrl set $SX1261_RESET_PIN op; WAIT_GPIO
++    pinctrl set $SX1302_POWER_EN_PIN op; WAIT_GPIO
++    pinctrl set $AD5338R_RESET_PIN op; WAIT_GPIO
++    # echo "$SX1302_RESET_PIN" > /sys/class/gpio/export; WAIT_GPIO
++    # echo "$SX1261_RESET_PIN" > /sys/class/gpio/export; WAIT_GPIO
++    # echo "$SX1302_POWER_EN_PIN" > /sys/class/gpio/export; WAIT_GPIO
++    # echo "$AD5338R_RESET_PIN" > /sys/class/gpio/export; WAIT_GPIO
++
++    # # set GPIOs as output
++    # echo "out" > /sys/class/gpio/gpio$SX1302_RESET_PIN/direction; WAIT_GPIO
++    # echo "out" > /sys/class/gpio/gpio$SX1261_RESET_PIN/direction; WAIT_GPIO
++    # echo "out" > /sys/class/gpio/gpio$SX1302_POWER_EN_PIN/direction; WAIT_GPIO
++    # echo "out" > /sys/class/gpio/gpio$AD5338R_RESET_PIN/direction; WAIT_GPIO
++}
++
++reset() {
++    echo "CoreCell reset through GPIO$SX1302_RESET_PIN..."
++    echo "SX1261 reset through GPIO$SX1302_RESET_PIN..."
++    echo "CoreCell power enable through GPIO$SX1302_POWER_EN_PIN..."
++    echo "CoreCell ADC reset through GPIO$AD5338R_RESET_PIN..."
++
++    # write output for SX1302 CoreCell power_enable and reset
++    # echo "1" > /sys/class/gpio/gpio$SX1302_POWER_EN_PIN/value; WAIT_GPIO
++    pinctrl set $SX1302_POWER_EN_PIN dh; WAIT_GPIO
++
++    # echo "1" > /sys/class/gpio/gpio$SX1302_RESET_PIN/value; WAIT_GPIO
++    # echo "0" > /sys/class/gpio/gpio$SX1302_RESET_PIN/value; WAIT_GPIO
++    pinctrl set $SX1302_RESET_PIN dh; WAIT_GPIO
++    pinctrl set $SX1302_RESET_PIN dl; WAIT_GPIO
++
++    # echo "0" > /sys/class/gpio/gpio$SX1261_RESET_PIN/value; WAIT_GPIO
++    # echo "1" > /sys/class/gpio/gpio$SX1261_RESET_PIN/value; WAIT_GPIO
++    pinctrl set $SX1261_RESET_PIN dh; WAIT_GPIO
++    pinctrl set $SX1261_RESET_PIN dl; WAIT_GPIO
++
++    # echo "0" > /sys/class/gpio/gpio$AD5338R_RESET_PIN/value; WAIT_GPIO
++    # echo "1" > /sys/class/gpio/gpio$AD5338R_RESET_PIN/value; WAIT_GPIO
++    pinctrl set $AD5338R_RESET_PIN dh; WAIT_GPIO
++    pinctrl set $AD5338R_RESET_PIN dl; WAIT_GPIO
++}
++
++term() {
++    echo "Resetting Pins..."
++    pinctrl set $SX1302_RESET_PIN no; WAIT_GPIO
++    pinctrl set $SX1261_RESET_PIN no; WAIT_GPIO
++    pinctrl set $SX1302_POWER_EN_PIN no; WAIT_GPIO
++    pinctrl set $AD5338R_RESET_PIN no; WAIT_GPIO
++    echo "Resetting Done..."
++    # # cleanup all GPIOs
++    # if [ -d /sys/class/gpio/gpio$SX1302_RESET_PIN ]
++    # then
++    #     echo "$SX1302_RESET_PIN" > /sys/class/gpio/unexport; WAIT_GPIO
++    # fi
++    # if [ -d /sys/class/gpio/gpio$SX1261_RESET_PIN ]
++    # then
++    #     echo "$SX1261_RESET_PIN" > /sys/class/gpio/unexport; WAIT_GPIO
++    # fi
++    # if [ -d /sys/class/gpio/gpio$SX1302_POWER_EN_PIN ]
++    # then
++    #     echo "$SX1302_POWER_EN_PIN" > /sys/class/gpio/unexport; WAIT_GPIO
++    # fi
++    # if [ -d /sys/class/gpio/gpio$AD5338R_RESET_PIN ]
++    # then
++    #     echo "$AD5338R_RESET_PIN" > /sys/class/gpio/unexport; WAIT_GPIO
++    # fi
++}
++
++case "$1" in
++    start)
++    term # just in case
++    init
++    reset
++    ;;
++    stop)
++    reset
++    term
++    ;;
++    *)
++    echo "Usage: $0 {start|stop}"
++    exit 1
++    ;;
++esac
++
++exit 0
+\ No newline at end of file
+diff --git a/reset_sx130x.sh b/reset_sx130x.sh
+new file mode 100755
+index 0000000..e1584c0
+--- /dev/null
++++ b/reset_sx130x.sh
+@@ -0,0 +1,3 @@
++#!/bin/bash
++# Wrapper that always calls reset_lgw.sh with "start"
++$(dirname "$0")/reset_lgw.sh start
+diff --git a/setup.gmk b/setup.gmk
+index d7c4363..be95894 100644
+--- a/setup.gmk
++++ b/setup.gmk
+@@ -57,8 +57,7 @@ ifeq (,$(wildcard ${TOOLCHAIN}))
+ ifeq (${LOCAL_ARCH},${ARCH})
+ TOOLPREFIX=
+ else
+-$(warning No toolchain for platform '${platform}' and local arch is not '${ARCH}')
+-TOOLPREFIX=NO-TOOLCHAIN-FOUND-
++TOOLPREFIX=
+ endif
+ else
+ # Found a matching cross compile toolchain
+diff --git a/src-linux/gps.c b/src-linux/gps.c
+index 9371103..7b26c86 100644
+--- a/src-linux/gps.c
++++ b/src-linux/gps.c
+@@ -256,15 +256,21 @@ static int send_gpsev_fix(str_t gpsev, float lat, float lon, float alt,
+         LOG(MOD_S2E|ERROR, "Failed to send GPS event. Either no TC connection or insufficient IO buffer space.");
+         return 0;
+     }
++
++    char lat_str[32], lon_str[32], alt_str[32];
++    snprintf(lat_str, sizeof(lat_str), "%.10g", lat);
++    snprintf(lon_str, sizeof(lon_str), "%.10g", lon);
++    snprintf(alt_str, sizeof(alt_str), "%.10g", alt);
++
+     uj_encOpen(&sendbuf, '{');
+     uj_encKVn(&sendbuf,
+             "msgtype",    's', "event",
+             "evcat",      's', "gps",
+             "evmsg",      '{',
+             /**/ "evtype",     's', gpsev,
+-            /**/ "lat",        'g', lat,
+-            /**/ "lon",        'g', lon,
+-            /**/ "alt",        'g', alt,
++            /**/ "lat",        's', lat_str,
++            /**/ "lon",        's', lon_str,
++            /**/ "alt",        's', alt_str,
+             /**/ "dilution",   'g', dilution,
+             /**/ "satellites", 'i', satellites,
+             /**/ "quality",    'i', quality,
+@@ -366,7 +372,7 @@ static void nmea_gga (char* p) {
+ 
+     if( last_reported_fix <= 0 && fix > 0 && now > time_fixchange + delay &&
+         send_gpsev_fix(GPSEV_FIX, lat, lon, alt, dilution, satellites, quality, 0.0, 0.0)) {
+-        last_reported_fix = fix;
++        //last_reported_fix = fix;
+         nofix_backoff = 0;
+     }
+     if( fix < 0 ) {
+diff --git a/src/ral_lgw.c b/src/ral_lgw.c
+index c960acc..53e64c7 100644
+--- a/src/ral_lgw.c
++++ b/src/ral_lgw.c
+@@ -297,11 +297,10 @@ static void log_rawpkt(u1_t level, str_t msg, struct lgw_pkt_rx_s * pkt_rx) {
+ 
+ //ATTR_FASTCODE 
+ static void rxpolling (tmr_t* tmr) {
+-    int rounds = 0;
+-    while(rounds++ < RAL_MAX_RXBURST) {
+-        struct lgw_pkt_rx_s pkt_rx;
+-        int n = lgw_receive(1, &pkt_rx);
+-        if( n < 0 || n > 1 ) {
++    while(1) {
++        struct lgw_pkt_rx_s pkt_rx[10];
++        int n = lgw_receive(10, pkt_rx);
++        if( n < 0 || n > 10 ) {
+             LOG(MOD_RAL|ERROR, "lgw_receive error: %d", n);
+             break;
+         }
+@@ -309,47 +308,49 @@ static void rxpolling (tmr_t* tmr) {
+             break;
+         }
+ 
+-        rxjob_t* rxjob = !TC ? NULL : s2e_nextRxjob(&TC->s2ctx);
+-        if( rxjob == NULL ) {
+-            log_rawpkt(ERROR, "Dropped RX frame - out of space: ", &pkt_rx);
+-            break; // Allow to flush RX jobs
+-        }
+-        if( pkt_rx.status != STAT_CRC_OK ) {
+-            if( log_shallLog(MOD_RAL|DEBUG) ) {
+-                log_rawpkt(DEBUG, "", &pkt_rx);
++        for (int i = 0; i < n; i++) {
++            rxjob_t* rxjob = !TC ? NULL : s2e_nextRxjob(&TC->s2ctx);
++            if( rxjob == NULL ) {
++                log_rawpkt(ERROR, "Dropped RX frame - out of space: ", &pkt_rx[i]);
++                continue; // Allow to flush RX jobs
+             }
+-            continue; // silently ignore bad CRC
+-        }
+-        if( pkt_rx.size > MAX_RXFRAME_LEN ) {
+-            // This should not happen since caller provides
+-            // space for max frame length - 255 bytes
+-            log_rawpkt(ERROR, "Dropped RX frame - frame size too large: ", &pkt_rx);
+-            continue;
+-        }
++            if( pkt_rx[i].status != STAT_CRC_OK ) {
++                if( log_shallLog(MOD_RAL|DEBUG) ) {
++                    log_rawpkt(DEBUG, "", &pkt_rx[i]);
++                }
++                continue; // silently ignore bad CRC
++            }
++
++            if( pkt_rx[i].size > MAX_RXFRAME_LEN ) {
++                log_rawpkt(ERROR, "Dropped RX frame - frame size too large: ", &pkt_rx[i]);
++                continue;
++            }
++
++            rxjob->fts = pkt_rx[i].ftime_received ? pkt_rx[i].ftime : -1;
+ 
+-        memcpy(&TC->s2ctx.rxq.rxdata[rxjob->off], pkt_rx.payload, pkt_rx.size);
+-        rxjob->len   = pkt_rx.size;
+-        rxjob->freq  = pkt_rx.freq_hz;
+-        rxjob->xtime = ts_xticks2xtime(pkt_rx.count_us, last_xtime);
++            memcpy(&TC->s2ctx.rxq.rxdata[rxjob->off], pkt_rx[i].payload, pkt_rx[i].size);
++            rxjob->len   = pkt_rx[i].size;
++            rxjob->freq  = pkt_rx[i].freq_hz;
++            rxjob->xtime = ts_xticks2xtime(pkt_rx[i].count_us, last_xtime);
+ #if defined(CFG_sx1302)
+-        rxjob->rssi  = (u1_t)-pkt_rx.rssis;
++            rxjob->rssi  = (u1_t)-pkt_rx[i].rssis;
+ #else
+-        rxjob->rssi  = (u1_t)-pkt_rx.rssi;
++            rxjob->rssi  = (u1_t)-pkt_rx[i].rssi;
+ #endif
+-        rxjob->snr   = (s1_t)(pkt_rx.snr*4);
+-        rps_t rps = ral_lgw2rps(&pkt_rx);
+-        rxjob->dr = s2e_rps2dr(&TC->s2ctx, rps);
+-        if( rxjob->dr == DR_ILLEGAL ) {
+-            log_rawpkt(ERROR, "Dropped RX frame - unable to map to an up DR: ", &pkt_rx);
+-            continue;
+-        }
+-
+-        if( log_shallLog(MOD_RAL|XDEBUG) ) {
+-            log_rawpkt(XDEBUG, "", &pkt_rx);
+-        }
++            rxjob->snr   = (s1_t)(pkt_rx[i].snr*4);
++            rps_t rps = ral_lgw2rps(&pkt_rx[i]);
++            rxjob->dr = s2e_rps2dr(&TC->s2ctx, rps);
++            if( rxjob->dr == DR_ILLEGAL ) {
++                log_rawpkt(ERROR, "Dropped RX frame - unable to map to an up DR: ", &pkt_rx[i]);
++                continue;
++            }
+ 
+-        s2e_addRxjob(&TC->s2ctx, rxjob);
++            if( log_shallLog(MOD_RAL|XDEBUG) ) {
++                log_rawpkt(XDEBUG, "", &pkt_rx[i]);
++            }
+ 
++            s2e_addRxjob(&TC->s2ctx, rxjob);
++        }
+     }
+     s2e_flushRxjobs(&TC->s2ctx);
+     rt_setTimer(tmr, rt_micros_ahead(RX_POLL_INTV));
+diff --git a/station.conf b/station.conf
+new file mode 100644
+index 0000000..172959d
+--- /dev/null
++++ b/station.conf
+@@ -0,0 +1,48 @@
++{
++  "SX1302_conf": {
++    "lorawan_public": true,
++    "clksrc": 0,
++    "device": "/dev/spidev0.0",
++    "pps": true,
++    "radio_0": {
++      "type": "SX1250",
++      "rssi_offset": -215.4,
++      "rssi_tcomp": {"coeff_a": 0, "coeff_b": 0, "coeff_c": 20.41, "coeff_d": 2162.56, "coeff_e": 0},
++      "tx_enable": true,
++      "antenna_gain": 0,
++      "tx_gain_lut":[
++        {"rf_power": 12, "pa_gain": 0, "pwr_idx": 15},
++        {"rf_power": 13, "pa_gain": 0, "pwr_idx": 16},
++        {"rf_power": 14, "pa_gain": 0, "pwr_idx": 17},
++        {"rf_power": 15, "pa_gain": 0, "pwr_idx": 19},
++        {"rf_power": 16, "pa_gain": 0, "pwr_idx": 20},
++        {"rf_power": 17, "pa_gain": 0, "pwr_idx": 22},
++        {"rf_power": 18, "pa_gain": 1, "pwr_idx": 1},
++        {"rf_power": 19, "pa_gain": 1, "pwr_idx": 2},
++        {"rf_power": 20, "pa_gain": 1, "pwr_idx": 3},
++        {"rf_power": 21, "pa_gain": 1, "pwr_idx": 4},
++        {"rf_power": 22, "pa_gain": 1, "pwr_idx": 5},
++        {"rf_power": 23, "pa_gain": 1, "pwr_idx": 6},
++        {"rf_power": 24, "pa_gain": 1, "pwr_idx": 7},
++        {"rf_power": 25, "pa_gain": 1, "pwr_idx": 9},
++        {"rf_power": 26, "pa_gain": 1, "pwr_idx": 11},
++        {"rf_power": 27, "pa_gain": 1, "pwr_idx": 14}
++      ]
++    },
++    "radio_1": {
++      "type": "SX1250",
++      "rssi_offset": -215.4,
++      "rssi_tcomp": {"coeff_a": 0, "coeff_b": 0, "coeff_c": 20.41, "coeff_d": 2162.56, "coeff_e": 0},
++      "tx_enable": false
++    }
++  },
++  "station_conf": {
++    "log_file":    "stderr",
++    "log_level":   "XDEBUG",
++    "log_size":    10e6,
++    "log_rotate":  3,
++    "gps": "/dev/serial0",
++    /* Send GPS report not fast than every 1sec */
++    "GPS_REPORT_DELAY": 10
++  }
++}
+\ No newline at end of file
+diff --git a/tc.uri b/tc.uri
+new file mode 100644
+index 0000000..4374683
+--- /dev/null
++++ b/tc.uri
+@@ -0,0 +1 @@
++ws://100.79.56.99:3001
