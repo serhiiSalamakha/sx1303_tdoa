@@ -1,0 +1,181 @@
+diff --git a/internal/backend/basicstation/backend.go b/internal/backend/basicstation/backend.go
+index 11f0742..714df90 100644
+--- a/internal/backend/basicstation/backend.go
++++ b/internal/backend/basicstation/backend.go
+@@ -28,6 +28,7 @@ import (
+ 	"github.com/brocaar/lorawan/band"
+ 	"github.com/brocaar/lorawan/gps"
+ 	"github.com/chirpstack/chirpstack/api/go/v4/gw"
++	"github.com/chirpstack/chirpstack/api/go/v4/common"
+ )
+ 
+ // websocket upgrade parameters
+@@ -543,6 +544,18 @@ func (b *Backend) handleGateway(r *http.Request, conn *connection) {
+ 				continue
+ 			}
+ 			b.handleTimeSync(gatewayID, pl)
++		case structs.EventMessage:
++			// handle event
++			var pl structs.EventDataFrame
++			if err := json.Unmarshal(msg, &pl); err != nil {
++				log.WithError(err).WithFields(log.Fields{
++					"message_type": msgType,
++					"gateway_id":   gatewayID,
++					"payload":      string(msg),
++				}).Error("backend/basicstation: unmarshal json message error")
++				continue
++			}
++			b.handleEvent(gatewayID, pl)
+ 		default:
+ 			b.handleRawPacketForwarderEvent(gatewayID, msg)
+ 		}
+@@ -672,6 +685,15 @@ func (b *Backend) handleUplinkDataFrame(gatewayID lorawan.EUI64, v structs.Uplin
+ 
+ 	// count metrics
+ 	if conn, err := b.gateways.get(gatewayID); err == nil {
++		conn.Lock()
++		uplinkFrame.RxInfo.Location = &common.Location{
++			Latitude:  conn.location.latitude,
++			Longitude: conn.location.longitude,
++			Altitude:  conn.location.altitude,
++			Source:    common.LocationSource_GPS,
++		}
++		conn.Unlock()
++
+ 		conn.stats.CountUplink(uplinkFrame)
+ 	}
+ 
+@@ -851,3 +873,35 @@ func (b *Backend) sendTimesyncRequest(gatewayID lorawan.EUI64, upInfo structs.Ra
+ 		"gpstime":    timesync.GPSTime,
+ 	}).Info("backend/basicstation: timesync request sent to gateway")
+ }
++
++func (b *Backend) handleEvent(gatewayID lorawan.EUI64, v structs.EventDataFrame) {
++	if v.EvCat != "gps" {
++		log.WithFields(log.Fields{
++			"gateway_id": gatewayID,
++			"evcat":      v.EvCat,
++		}).Debug("backend/basicstation: unsupported event category")
++		return
++	}
++
++	// Only fix and move are valid for storing coordinates
++	if v.EvMsg.EvType != "fix" && v.EvMsg.EvType != "move" {
++		log.WithFields(log.Fields{
++			"gateway_id": gatewayID,
++			"evtype":     v.EvMsg.EvType,
++		}).Debug("backend/basicstation: ignoring gps event type")
++		return
++	}
++
++	conn, err := b.gateways.get(gatewayID)
++	if err != nil {
++		log.WithError(err).WithField("gateway_id", gatewayID).Error("backend/basicstation: get gateway connection error")
++		return
++	}
++
++	conn.Lock()
++	defer conn.Unlock()
++
++	conn.location.latitude = v.EvMsg.Latitude
++	conn.location.longitude = v.EvMsg.Longitude
++	conn.location.altitude = v.EvMsg.Altitude
++}
+diff --git a/internal/backend/basicstation/gateway.go b/internal/backend/basicstation/gateway.go
+index 11f9937..7ffc968 100644
+--- a/internal/backend/basicstation/gateway.go
++++ b/internal/backend/basicstation/gateway.go
+@@ -16,11 +16,18 @@ var (
+ 	errGatewayDoesNotExist = errors.New("gateway does not exist")
+ )
+ 
++type locationState struct {
++	latitude  float64
++	longitude float64
++	altitude  float64
++}
++
+ type connection struct {
+ 	sync.Mutex
+ 	conn         *websocket.Conn
+ 	stats        *stats.Collector
+ 	lastTimesync time.Time
++	location     locationState
+ }
+ 
+ type gateways struct {
+diff --git a/internal/backend/basicstation/structs/event_data_frame.go b/internal/backend/basicstation/structs/event_data_frame.go
+new file mode 100644
+index 0000000..7eba897
+--- /dev/null
++++ b/internal/backend/basicstation/structs/event_data_frame.go
+@@ -0,0 +1,19 @@
++package structs
++
++// EventDataFrame implements the event data-frame message.
++type EventDataFrame struct {
++	MessageType MessageType `json:"msgtype"`
++	EvCat       string      `json:"evcat"`
++	EvMsg       GpsData     `json:"evmsg"`
++}
++
++type GpsData struct {
++	EvType     string  `json:"evtype"`
++	Latitude   float64 `json:"lat,string"`
++	Longitude  float64 `json:"lon,string"`
++	Altitude   float64 `json:"alt,string"`
++	Dilution   float64 `json:"dilution"`
++	Satellites int     `json:"satellites"`
++	Quality    int     `json:"quality"`
++
++}
+diff --git a/internal/backend/basicstation/structs/msg_type.go b/internal/backend/basicstation/structs/msg_type.go
+index 86dd8e8..ae5a148 100644
+--- a/internal/backend/basicstation/structs/msg_type.go
++++ b/internal/backend/basicstation/structs/msg_type.go
+@@ -19,6 +19,7 @@ const (
+ 	DownlinkMessage             MessageType = "dnmsg"
+ 	DownlinkTransmittedMessage  MessageType = "dntxed"
+ 	TimeSyncMessage             MessageType = "timesync"
++	EventMessage                MessageType = "event"
+ )
+ 
+ type messageTypePayload struct {
+diff --git a/internal/backend/basicstation/structs/radio_meta_data.go b/internal/backend/basicstation/structs/radio_meta_data.go
+index 64725eb..1ee1ff1 100644
+--- a/internal/backend/basicstation/structs/radio_meta_data.go
++++ b/internal/backend/basicstation/structs/radio_meta_data.go
+@@ -27,6 +27,7 @@ type RadioMetaDataUpInfo struct {
+ 	RCtx    uint64  `json:"rctx"`
+ 	XTime   uint64  `json:"xtime"`
+ 	GPSTime int64   `json:"gpstime"`
++	Fts     *int64  `json:"fts,omitempty"`
+ 	RSSI    float32 `json:"rssi"`
+ 	SNR     float32 `json:"snr"`
+ }
+@@ -93,6 +94,25 @@ func SetRadioMetaDataToProto(loraBand band.Band, gatewayID lorawan.EUI64, rmd Ra
+ 		pb.RxInfo.GwTime = timestamppb.New(gpsTimeTime)
+ 	}
+ 
++	if fts := rmd.UpInfo.Fts; fts != nil {
++		if *fts > -1 {
++
++			ftsTimeDur := time.Duration(*fts) * time.Nanosecond
++
++			if gpsTime := rmd.UpInfo.GPSTime; gpsTime != 0 {
++				gpsTimeDur := time.Duration(gpsTime) * time.Microsecond
++				// take the seconds from the gps time
++				gpsTimeDur = gpsTimeDur - (gpsTimeDur % time.Second)
++				// add the nanos from the fine-timestamp
++				ftsTimeDur = gpsTimeDur + ftsTimeDur
++			}
++
++			pb.RxInfo.FineTimeSinceGpsEpoch = durationpb.New(ftsTimeDur)
++		} else {
++			pb.RxInfo.FineTimeSinceGpsEpoch = durationpb.New(0)
++		}
++	}
++
+ 	// Context
+ 	pb.RxInfo.Context = make([]byte, 16)
+ 	binary.BigEndian.PutUint64(pb.RxInfo.Context[0:8], uint64(rmd.UpInfo.RCtx))
